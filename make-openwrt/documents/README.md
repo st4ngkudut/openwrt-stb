@@ -89,7 +89,7 @@ Now you can `Fork` the `repository`, open the repository [https://github.com/oph
 
 ## 4. Personalized OpenWrt firmware customization file description
 
-After the previous 3 steps of preparation, let's start personalized firmware customization now. Have some files in the [router-config/lede-master](https://github.com/ophub/amlogic-s9xxx-openwrt/tree/main/router-config/lede-master) directory. Except for the description files, the other three are files for customizing OpenWrt firmware. In this chapter, we only make the simplest instructions, so that you can experience the happiness of personalized customization with your hands. I put more complex customization operations in `Section 10`, which requires you to have a little foundation.
+After the previous 3 steps of preparation, let's start personalized firmware customization now. Have some files in the [router-config/lede-master](../../router-config/lede-master/) directory. The 3 files for customizing OpenWrt firmware. In this chapter, we only make the simplest instructions, so that you can experience the happiness of personalized customization with your hands. I put more complex customization operations in `Section 10`, which requires you to have a little foundation.
 
 ### 4.1 .config file description
 
@@ -415,7 +415,7 @@ Refer to the related [parameter description](https://github.com/ophub/amlogic-s9
 
 ### 10.3 Custom banner information
 
-The default [/etc/banner](../amlogic-s9xxx/common-files/rootfs/etc/banner) information is as follows, you can use the [banner generator](https://www.bootschool.net/ascii) Customize your own personalized banner information(The style below is `slant`), just overwrite the file with the same name.
+The default [/etc/banner](../openwrt-files/common-files/etc/banner) information is as follows, you can use the [banner generator](https://www.bootschool.net/ascii) Customize your own personalized banner information(The style below is `slant`), just overwrite the file with the same name.
 
 ```yaml
      ___              __      ____                 _       __     __
