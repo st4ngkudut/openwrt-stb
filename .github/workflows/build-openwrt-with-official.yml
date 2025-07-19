@@ -1,17 +1,12 @@
-#=====================================================================================
-# https://github.com/ophub/amlogic-s9xxx-openwrt
-# Description: Build OpenWrt with official
-# Source code repository: https://github.com/openwrt/openwrt / Branch: master
-#=====================================================================================
-
 name: Build OpenWrt with official
 
+# Memicu alur kerja pada saat pengiriman repositori atau permintaan manual
 on:
   repository_dispatch:
   workflow_dispatch:
     inputs:
       openwrt_board:
-        description: "Select Amlogic board"
+        description: "Pilih papan Amlogic untuk kompilasi firmware"
         required: false
         default: "all"
         type: choice
@@ -47,7 +42,7 @@ on:
           - beikeyun
           - l1pro
       openwrt_kernel:
-        description: "Select kernel version"
+        description: "Pilih versi kernel untuk build OpenWrt"
         required: false
         default: "5.15.85_6.1.1"
         type: choice
@@ -61,145 +56,242 @@ on:
           - 5.15.85
           - 6.1.1
       auto_kernel:
-        description: "Auto use the latest kernel"
+        description: "Secara otomatis gunakan kernel terbaru yang tersedia"
         required: false
         default: true
         type: boolean
       kernel_repo:
-        description: "Set the kernel repository"
+        description: "Atur URL repositori kernel kustom"
         required: false
         default: "https://github.com/ophub/kernel/tree/main/pub"
       openwrt_size:
-        description: "Set the rootfs size(Unit: MiB)"
+        description: "Atur ukuran sistem berkas root dalam MiB"
         required: false
         default: "1024"
 
+# Tentukan variabel lingkungan untuk konsistensi dan modifikasi yang lebih mudah
 env:
-  REPO_URL: https://github.com/openwrt/openwrt
-  REPO_BRANCH: master
-  FEEDS_CONF: router-config/openwrt-master/feeds.conf.default
-  CONFIG_FILE: router-config/openwrt-master/config
-  DIY_P1_SH: router-config/openwrt-master/diy-part1.sh
-  DIY_P2_SH: router-config/openwrt-master/diy-part2.sh
-  TZ: America/New_York
+  REPO_URL: https://github.com/openwrt/openwrt # Repositori sumber OpenWrt
+  REPO_BRANCH: master # Cabang sumber OpenWrt
+  FEEDS_CONF: router-config/openwrt-master/feeds.conf.default # Path ke konfigurasi feeds kustom
+  CONFIG_FILE: router-config/openwrt-master/config # Path ke file .config OpenWrt
+  DIY_P1_SH: router-config/openwrt-master/diy-part1.sh # Skrip untuk modifikasi pra-pembaruan feeds
+  DIY_P2_SH: router-config/openwrt-master/diy-part2.sh # Skrip untuk modifikasi pasca-pembaruan feeds
+  TZ: Asia/Jakarta # Atur zona waktu ke WIB (Medan, Sumatera Utara, Indonesia)
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04 # Tentukan Ubuntu 22.04 sebagai runner
+    # Pastikan alur kerja dipicu oleh pemilik repositori untuk keamanan
     if: ${{ github.event.repository.owner.id }} == ${{ github.event.sender.id }}
 
     steps:
-      - name: Checkout
+      - name: ⬇️ Checkout Repositori
         uses: actions/checkout@v3
+        with:
+          # Ambil riwayat lengkap untuk memungkinkan operasi git yang lebih fleksibel jika diperlukan
+          fetch-depth: 0
 
-      - name: Initialization environment
-        id: init
+      - name: ⚙️ Inisialisasi Lingkungan Build
+        id: init_env
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          docker rmi `docker images -q`
+          echo "Menyiapkan lingkungan build..."
+          # Hapus citra docker untuk menghemat ruang
+          docker rmi `docker images -q` || true
+          # Bersihkan perangkat lunak yang sudah terinstal untuk mengosongkan ruang dan menghindari konflik
           sudo rm -rf /usr/share/dotnet /etc/apt/sources.list.d /usr/local/lib/android 2>/dev/null
           sudo -E apt-get -y purge azure-cli ghc* zulu* hhvm llvm* firefox google* dotnet* powershell openjdk* adoptopenjdk* mongodb* dotnet* moby* snapd* || true
+          # Perbarui dan tingkatkan paket apt
           sudo -E apt-get -qq update -y
           sudo -E apt-get -qq full-upgrade -y
+          # Instal dependensi yang diperlukan untuk kompilasi OpenWrt
           sudo -E apt-get -qq install -y $(curl -fsSL https://is.gd/depend_ubuntu2204_openwrt)
+          # Bersihkan paket yang tidak perlu
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
+          # Buat direktori kerja khusus dan atur kepemilikan
           sudo mkdir -p /workdir
-          sudo chown ${USER}:${GROUPS} /workdir
+          sudo chown "${USER}":"${GROUPS}" /workdir
+          # Atur zona waktu
           sudo timedatectl set-timezone "${TZ}"
-          echo "status=success" >> ${GITHUB_OUTPUT}
+          echo "Lingkungan build berhasil diinisialisasi."
+          echo "status=success" >> "${GITHUB_OUTPUT}"
 
-      - name: Clone source code
+      - name: 📥 Kloning Kode Sumber OpenWrt
         working-directory: /workdir
-        if: ${{ steps.init.outputs.status }} == 'success' && !cancelled()
+        if: ${{ steps.init_env.outputs.status == 'success' }} && !cancelled()
         run: |
-          df -hT ${PWD}
-          git clone -q --single-branch --depth 1 ${REPO_URL} -b ${REPO_BRANCH} openwrt
-          ln -sf /workdir/openwrt ${GITHUB_WORKSPACE}/openwrt
+          echo "Ruang disk sebelum kloning:"
+          df -hT "${PWD}"
+          echo "Mengkloning repositori OpenWrt dari ${REPO_URL} pada cabang ${REPO_BRANCH}..."
+          git clone -q --single-branch --depth 1 "${REPO_URL}" -b "${REPO_BRANCH}" openwrt
+          # Buat tautan simbolis untuk akses yang lebih mudah
+          ln -sf /workdir/openwrt "${GITHUB_WORKSPACE}"/openwrt
+          echo "Sumber OpenWrt dikloning."
 
-      - name: Load custom feeds
+      - name: ⚙️ Muat Konfigurasi Feeds Kustom
         run: |
-          [[ -e "${FEEDS_CONF}" ]] && cp -f ${FEEDS_CONF} openwrt/feeds.conf.default
-          chmod +x ${DIY_P1_SH}
+          echo "Memuat konfigurasi feeds kustom..."
+          if [[ -e "${FEEDS_CONF}" ]]; then
+            cp -f "${FEEDS_CONF}" openwrt/feeds.conf.default
+            echo "feeds.conf.default kustom diterapkan."
+          else
+            echo "Tidak ada feeds.conf.default kustom ditemukan. Menggunakan default."
+          fi
+          chmod +x "${DIY_P1_SH}"
           cd openwrt/
-          ${GITHUB_WORKSPACE}/${DIY_P1_SH}
+          echo "Menjalankan diy-part1.sh untuk modifikasi pra-pembaruan..."
+          "${GITHUB_WORKSPACE}"/"${DIY_P1_SH}"
+          echo "diy-part1.sh dijalankan."
 
-      - name: Update feeds
-        run: cd openwrt/ && ./scripts/feeds update -a
-
-      - name: Install feeds
-        run: cd openwrt/ && ./scripts/feeds install -a
-
-      - name: Load custom configuration
+      - name: 🔄 Perbarui Feeds OpenWrt
         run: |
-          [[ -d "files" ]] && mv -f files openwrt/files
-          [[ -e ${CONFIG_FILE} ]] && cp -f ${CONFIG_FILE} openwrt/.config
-          chmod +x ${DIY_P2_SH}
+          echo "Memperbarui feeds OpenWrt..."
+          cd openwrt/ && ./scripts/feeds update -a
+          echo "Feeds diperbarui."
+
+      - name: ➕ Instal Feeds OpenWrt
+        run: |
+          echo "Menginstal feeds OpenWrt..."
+          cd openwrt/ && ./scripts/feeds install -a
+          echo "Feeds diinstal."
+
+      - name: ⚙️ Muat Konfigurasi Build Kustom
+        run: |
+          echo "Memuat konfigurasi build kustom..."
+          if [[ -d "files" ]]; then
+            mv -f files openwrt/files
+            echo "Direktori 'files' kustom dipindahkan ke sumber OpenWrt."
+          else
+            echo "Tidak ada direktori 'files' kustom ditemukan."
+          fi
+          if [[ -e "${CONFIG_FILE}" ]]; then
+            cp -f "${CONFIG_FILE}" openwrt/.config
+            echo ".config file kustom diterapkan."
+          else
+            echo "Tidak ada .config file kustom ditemukan. Menggunakan default."
+          fi
+          chmod +x "${DIY_P2_SH}"
           cd openwrt/
-          ${GITHUB_WORKSPACE}/${DIY_P2_SH}
+          echo "Menjalankan diy-part2.sh untuk modifikasi pasca-pembaruan..."
+          "${GITHUB_WORKSPACE}"/"${DIY_P2_SH}"
+          echo "diy-part2.sh dijalankan."
 
-      - name: Download package
-        id: package
+      - name: 📦 Unduh Paket OpenWrt
+        id: download_packages
         run: |
+          echo "Menghasilkan konfigurasi default dan mengunduh paket..."
           cd openwrt/
           make defconfig
-          make download -j8
-          find dl -size -1024c -exec ls -l {} \;
-          find dl -size -1024c -exec rm -f {} \;
+          make download -j"$(nproc)" # Gunakan semua inti CPU yang tersedia untuk unduhan yang lebih cepat
+          echo "Memeriksa unduhan paket yang tidak lengkap..."
+          find dl -size -1024c -exec ls -l {} \; # Daftar file yang lebih kecil dari 1KB
+          find dl -size -1024c -exec rm -f {} \; # Hapus unduhan yang tidak lengkap
+          echo "Pengunduhan paket selesai."
+          echo "status=success" >> "${GITHUB_OUTPUT}"
 
-      - name: Compile the firmware
-        id: compile
+      - name: 🛠️ Kompilasi Firmware OpenWrt
+        id: compile_firmware
+        if: ${{ steps.download_packages.outputs.status == 'success' }} && !cancelled()
         run: |
+          echo "Memulai kompilasi firmware OpenWrt..."
           cd openwrt/
-          echo -e "$(nproc) thread compile"
-          make -j$(($(nproc) + 1)) V=s || make -j1 || make -j1 V=s
-          echo "build_tag=OpenWrt_Aml_official_$(date +"%m.%d.%H%M")" >> ${GITHUB_OUTPUT}
-          echo "status=success" >> ${GITHUB_OUTPUT}
+          # Tentukan jumlah thread kompilasi yang optimal (nproc + 1 adalah praktik umum)
+          COMPILE_THREADS=$(("$(nproc)" + 1))
+          echo "Kompilasi dengan ${COMPILE_THREADS} thread."
+          # Coba kompilasi dengan beberapa thread, kembali ke satu thread jika diperlukan untuk debugging
+          make -j"${COMPILE_THREADS}" V=s || make -j1 || make -j1 V=s
+          BUILD_TAG="OpenWrt_Aml_official_$(date +"%Y.%m.%d-%H%M")" # Tag yang lebih deskriptif
+          echo "build_tag=${BUILD_TAG}" >> "${GITHUB_OUTPUT}"
+          echo "status=success" >> "${GITHUB_OUTPUT}"
+          echo "Kompilasi firmware OpenWrt selesai."
 
-      - name: Upload OpenWrt Firmware to Release
+      - name: 🚀 Unggah Rootfs OpenWrt ke Rilis
         uses: ncipollo/release-action@main
-        if: ${{ steps.compile.outputs.status }} == 'success' && !cancelled()
+        if: ${{ steps.compile_firmware.outputs.status == 'success' }} && !cancelled()
         with:
-          tag: ${{ steps.compile.outputs.build_tag }}
+          tag: ${{ steps.compile_firmware.outputs.build_tag }}
+          # Hanya unggah rootfs pada awalnya, gambar lengkap dibangun nanti
           artifacts: openwrt/bin/targets/*/*/*rootfs.tar.gz
-          allowUpdates: true
+          allowUpdates: true # Izinkan pembaruan rilis yang ada jika tag sudah ada
           token: ${{ secrets.GH_TOKEN }}
+          body: |
+            Arsip rootfs build resmi OpenWrt. Ini adalah artefak sementara.
+            Citra firmware lengkap akan diunggah pada langkah selanjutnya.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }} # Secara eksplisit meneruskan token
 
-      - name: Clean up server space
-        if: ${{ steps.compile.outputs.status }} == 'success' && !cancelled()
+      - name: 🧹 Bersihkan Ruang Server (Intermediate)
+        if: ${{ steps.compile_firmware.outputs.status == 'success' }} && !cancelled()
         run: |
+          echo "Membersihkan file build perantara untuk mengosongkan ruang..."
           cd openwrt/
-          rm -rf $(ls . | grep -v "^bin$" | xargs) 2>/dev/null
-          df -hT ${PWD}
+          # Hapus semua file kecuali direktori 'bin' untuk menyimpan artefak yang dikompilasi
+          rm -rf "$(ls -A . | grep -v "^bin$")" 2>/dev/null
+          echo "Ruang disk setelah pembersihan perantara:"
+          df -hT "${PWD}"
 
-      - name: Build OpenWrt firmware
-        if: ${{ steps.compile.outputs.status }} == 'success' && !cancelled()
+      - name: 📦 Bangun Citra Firmware OpenWrt Amlogic
+        id: package_firmware
+        if: ${{ steps.compile_firmware.outputs.status == 'success' }} && !cancelled()
         uses: ophub/amlogic-s9xxx-openwrt@main
         with:
-          openwrt_path: openwrt/bin/targets/*/*/*rootfs.tar.gz
+          openwrt_path: openwrt/bin/targets/*/*/*rootfs.tar.gz # Path ke rootfs yang dikompilasi
           openwrt_board: ${{ inputs.openwrt_board }}
           openwrt_kernel: ${{ inputs.openwrt_kernel }}
           auto_kernel: ${{ inputs.auto_kernel }}
           kernel_repo: ${{ inputs.kernel_repo }}
           openwrt_size: ${{ inputs.openwrt_size }}
-          gh_token: ${{ secrets.GH_TOKEN }}
+          gh_token: ${{ secrets.GH_TOKEN }} # Meneruskan token GitHub ke aksi
+        # Atur variabel output dari aksi eksternal
+        env:
+          PACKAGED_STATUS: ${{ steps.package_firmware.outputs.status }}
+          PACKAGED_OUTPUTPATH: ${{ steps.package_firmware.outputs.openwrt_path }}
 
-      - name: Upload the packaged firmware to Release
+
+      - name: ⬆️ Unggah Firmware yang Dikemas ke Rilis
         uses: ncipollo/release-action@main
-        if: ${{ env.PACKAGED_STATUS }} == 'success' && !cancelled()
+        if: ${{ env.PACKAGED_STATUS == 'success' }} && !cancelled()
         with:
-          tag: ${{ steps.compile.outputs.build_tag }}
-          artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
-          allowUpdates: true
+          tag: ${{ steps.compile_firmware.outputs.build_tag }}
+          artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/* # Unggah semua citra firmware yang dihasilkan
+          allowUpdates: true # Perbarui rilis yang ada dengan artefak baru
           token: ${{ secrets.GH_TOKEN }}
           body: |
-            This is OpenWrt firmware for Amlogic s9xxx tv box
-            * Firmware information
-            Default IP: 192.168.1.1
-            Default username: root
-            Default password: password
-            Default WIFI name: OpenWrt
-            Default WIFI password: none
-            Install to EMMC: Login to OpenWrt → System → Amlogic Service → Install OpenWrt
+            🎉 **Firmware OpenWrt untuk Kotak TV Amlogic S9xxx** 🎉
 
+            Rilis ini menyediakan citra firmware OpenWrt yang sudah dibangun khusus untuk perangkat Amlogic S9xxx.
+            Ini dihasilkan langsung dari sumber OpenWrt resmi, memastikan stabilitas dan fitur-fitur terkini.
+
+            ---
+
+            ### 💻 Informasi Firmware
+
+            * **Alamat IP Default:** `192.168.1.1`
+            * **Nama Pengguna Default:** `root`
+            * **Kata Sandi Default:** `password`
+            * **Nama Wi-Fi Default:** `OpenWrt`
+            * **Kata Sandi Wi-Fi Default:** `none`
+
+            ---
+
+            ### 🚀 Panduan Instalasi (Instal ke EMMC)
+
+            1.  **Login ke OpenWrt:** Akses antarmuka web OpenWrt atau SSH menggunakan kredensial default.
+            2.  **Navigasi ke Layanan Amlogic:** Pergi ke `System` → `Amlogic Service`.
+            3.  **Mulai Instalasi:** Ikuti instruksi di layar untuk menginstal OpenWrt ke EMMC perangkat Anda.
+
+            ---
+
+            ### 🔗 Sumber Daya
+
+            * **Proyek OpenWrt:** [https://openwrt.org/](https://openwrt.org/)
+            * **Repositori OpenWrt Amlogic S9xxx:** [https://github.com/ophub/amlogic-s9xxx-openwrt](https://github.com/ophub/amlogic-s9xxx-openwrt)
+
+            ---
+
+            Nikmati perangkat Amlogic Anda yang ditingkatkan dengan OpenWrt! ✨
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }} # Secara eksplisit meneruskan token ke aksi
